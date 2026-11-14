@@ -1,0 +1,35 @@
+rules_version = '2';
+
+// TarlaGöz Storage güvenlik kuralları.
+//  - listings/<uid>/...  : ilan fotoğrafları. Oturum açmış herkes görebilir,
+//                          yalnızca sahibi yükleyip silebilir.
+//  - diagnoses/<uid>/... : teşhis fotoğrafları. Yalnızca sahibi görebilir.
+// Yalnızca 8 MB'tan küçük görsel dosyaları kabul edilir.
+//
+// Yayınlamak için: Firebase Console > Storage > Kurallar sekmesine yapıştırın.
+
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    function isOwner(userId) {
+      return request.auth != null && request.auth.uid == userId;
+    }
+
+    function validImage() {
+      return request.resource.size < 8 * 1024 * 1024
+        && request.resource.contentType.matches('image/.*');
+    }
+
+    match /listings/{userId}/{allPaths=**} {
+      allow read: if request.auth != null;
+      allow create, update: if isOwner(userId) && validImage();
+      allow delete: if isOwner(userId);
+    }
+
+    match /diagnoses/{userId}/{allPaths=**} {
+      allow read: if isOwner(userId);
+      allow create, update: if isOwner(userId) && validImage();
+      allow delete: if isOwner(userId);
+    }
+  }
+}

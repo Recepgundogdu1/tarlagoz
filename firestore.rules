@@ -1,0 +1,110 @@
+rules_version = '2';
+
+// TarlaGöz Firestore güvenlik kuralları.
+//
+// Temel ilke: bir kural açıkça izin vermiyorsa erişim YOKTUR (varsayılan ret).
+//  - users, fields, expenses, diagnoses: yalnızca sahibi okuyup yazabilir.
+//  - listings: oturum açmış herkes okuyabilir; yalnızca sahibi oluşturup
+//    değiştirebilir veya silebilir.
+//
+// Yayınlamak için: Firebase Console > Firestore Database > Kurallar sekmesine
+// yapıştırın veya "firebase deploy --only firestore:rules" çalıştırın.
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    // Var olan belgenin sahibi mi? (okuma, güncelleme, silme)
+    function ownsExisting() {
+      return signedIn() && resource.data.ownerId == request.auth.uid;
+    }
+
+    // Yazılmak istenen belge bu kullanıcıya mı ait? (oluşturma)
+    // Böylece kimse başkasının adına kayıt oluşturamaz.
+    function ownsIncoming() {
+      return signedIn() && request.resource.data.ownerId == request.auth.uid;
+    }
+
+    // Güncellemede sahiplik başkasına devredilemez.
+    function keepsOwner() {
+      return request.resource.data.ownerId == resource.data.ownerId;
+    }
+
+    function validField() {
+      let d = request.resource.data;
+      return d.name is string && d.name.size() > 0 && d.name.size() <= 60
+        && d.crop is string && d.crop.size() <= 40
+        && d.area is number && d.area > 0 && d.area <= 1000000
+        && d.season is string && d.season.size() > 0 && d.season.size() <= 20;
+    }
+
+    function validExpense() {
+      let d = request.resource.data;
+      return d.fieldId is string
+        && d.season is string
+        && d.category in ['tohum', 'gubre', 'ilac', 'mazot', 'sulama', 'iscilik', 'kira', 'diger']
+        && d.amount is number && d.amount > 0 && d.amount < 100000000
+        && d.date is string && d.date.size() == 10
+        && d.note is string && d.note.size() <= 200;
+    }
+
+    function validDiagnosis() {
+      let d = request.resource.data;
+      return d.fieldId is string
+        && d.disease is string && d.disease.size() <= 120
+        && d.confidence is number && d.confidence >= 0 && d.confidence <= 1
+        && d.advice is string && d.advice.size() <= 600;
+    }
+
+    function validListing() {
+      let d = request.resource.data;
+      return d.fieldId is string
+        && d.title is string && d.title.size() > 0 && d.title.size() <= 120
+        && d.price is number && d.price > 0
+        && d.area is number && d.area > 0
+        && d.city is string && d.city.size() <= 40
+        && d.district is string && d.district.size() <= 40
+        && d.description is string && d.description.size() <= 1000
+        && d.phone is string && d.phone.size() <= 20
+        && d.photos is list && d.photos.size() <= 5
+        && d.reportCard is list && d.reportCard.size() <= 50;
+    }
+
+    // Kullanıcı profili: belge kimliği kullanıcının kimliğiyle aynı olmalı.
+    match /users/{userId} {
+      allow read, create, update: if signedIn() && request.auth.uid == userId;
+      allow delete: if false;
+    }
+
+    match /fields/{fieldId} {
+      allow read, delete: if ownsExisting();
+      allow create: if ownsIncoming() && validField();
+      allow update: if ownsExisting() && keepsOwner() && validField();
+    }
+
+    match /expenses/{expenseId} {
+      allow read, delete: if ownsExisting();
+      allow create: if ownsIncoming() && validExpense();
+      allow update: if ownsExisting() && keepsOwner() && validExpense();
+    }
+
+    match /diagnoses/{diagnosisId} {
+      allow read, delete: if ownsExisting();
+      allow create: if ownsIncoming() && validDiagnosis();
+      allow update: if false; // teşhis kaydı sonradan değiştirilemez
+    }
+
+    // İlanlar: oturum açmış herkes okuyabilir.
+    // Oturumsuz (tamamen herkese açık) okuma isterseniz "if true" yapın; ancak
+    // bu, ilanlardaki telefon numaralarının toplu olarak çekilmesini kolaylaştırır.
+    match /listings/{listingId} {
+      allow read: if signedIn();
+      allow create: if ownsIncoming() && validListing();
+      allow update: if ownsExisting() && keepsOwner() && validListing();
+      allow delete: if ownsExisting();
+    }
+  }
+}
